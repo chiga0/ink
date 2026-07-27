@@ -83,6 +83,44 @@ const cleanupYogaNode = (node?: YogaNode): void => {
 	node?.freeRecursive();
 };
 
+/**
+ * Clear `staticNode` (and its change-detection counterpart `previousStaticNode`)
+ * when the node it points at is being removed as part of a larger subtree.
+ *
+ * The existing identity check (`staticNode === removeNode`) only catches direct
+ * removal of the `<Static>` element. When an *ancestor* of `<Static>` is
+ * removed, `freeRecursive()` frees the static node's Yoga WASM memory but the
+ * stale `staticNode` reference survives, and the next render calls
+ * `getComputedWidth()` on freed memory → `RuntimeError: memory access out of
+ * bounds` (see QwenLM/qwen-code#6820).
+ *
+ * Must be called BEFORE `removeChildNode` breaks the parent chain.
+ */
+const clearStaticNodeIfContained = (
+	removeNode: DOMElement | TextNode,
+): void => {
+	const staticNode = currentRootNode?.staticNode;
+
+	if (!staticNode) {
+		return;
+	}
+
+	// Walk up from staticNode to see if removeNode is an ancestor.
+	let current: DOMElement | undefined = staticNode;
+
+	while (current) {
+		if (current === removeNode) {
+			// Only clear staticNode, not previousStaticNode. The inequality
+			// (undefined !== previousStaticNode) triggers onStaticChange in
+			// resetAfterCommit, which resets fullStaticOutput.
+			currentRootNode!.staticNode = undefined;
+			return;
+		}
+
+		current = current.parentNode;
+	}
+};
+
 type Props = Record<string, unknown>;
 
 type HostContext = {
@@ -302,16 +340,16 @@ export default createReconciler<
 	appendChildToContainer: appendChildNode,
 	insertInContainerBefore: insertBeforeNode,
 	removeChildFromContainer(node, removeNode) {
+		// Must run before removeChildNode breaks the parent chain.
+		clearStaticNodeIfContained(removeNode);
+
 		removeChildNode(node, removeNode);
 		cleanupYogaNode(removeNode.yogaNode);
 
-		// Only clear staticNode if it still points at the removed node. On key-driven remounts, `createInstance` already registered the new node before this removal fires.
-		if (
-			removeNode.internal_static &&
-			currentRootNode?.staticNode === removeNode
-		) {
-			currentRootNode.staticNode = undefined;
-		}
+		// Prevent stale references from accessing freed WASM memory. The JS
+		// wrapper stays truthy after freeRecursive(), so optional chaining
+		// (?.yogaNode) cannot detect the freed state on its own.
+		removeNode.yogaNode = undefined;
 	},
 	commitUpdate(node, _type, oldProps, newProps) {
 		if (currentRootNode && node.internal_static) {
@@ -362,16 +400,11 @@ export default createReconciler<
 		setTextNodeValue(node, newText);
 	},
 	removeChild(node, removeNode) {
+		clearStaticNodeIfContained(removeNode);
+
 		removeChildNode(node, removeNode);
 		cleanupYogaNode(removeNode.yogaNode);
-
-		// Same guard as removeChildFromContainer: only clear if this is still the active static node.
-		if (
-			removeNode.internal_static &&
-			currentRootNode?.staticNode === removeNode
-		) {
-			currentRootNode.staticNode = undefined;
-		}
+		removeNode.yogaNode = undefined;
 	},
 	setCurrentUpdatePriority(newPriority: number) {
 		currentUpdatePriority = newPriority;

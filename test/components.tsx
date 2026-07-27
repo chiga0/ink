@@ -603,6 +603,68 @@ test('fullStaticOutput is reset when <Static> unmounts so stale items are not re
 	t.true(afterUnmount.includes('d2'), 'new dynamic output must still render');
 });
 
+test('unmounting an ancestor of <Static> clears staticNode and does not crash the renderer', t => {
+	// When a component that *contains* <Static> is unmounted, the reconciler
+	// removes the ancestor and freeRecursive() frees the static node's Yoga
+	// WASM memory. If staticNode is not cleared, the next render calls
+	// getComputedWidth() on freed memory → RuntimeError: memory access out
+	// of bounds (QwenLM/qwen-code#6820).
+	const stdout = createStdout();
+
+	function Wrapper({children}: {readonly children: React.ReactNode}) {
+		return <Box>{children}</Box>;
+	}
+
+	function App({
+		showWrapper,
+		label,
+	}: {
+		readonly showWrapper: boolean;
+		readonly label: string;
+	}) {
+		return (
+			<Box>
+				{showWrapper ? (
+					<Wrapper>
+						<Static items={['HISTORY-X']}>
+							{item => <Text key={item}>{item}</Text>}
+						</Static>
+					</Wrapper>
+				) : null}
+				<Text>{label}</Text>
+			</Box>
+		);
+	}
+
+	const {rerender} = render(<App showWrapper label="live-1" />, {
+		stdout,
+		debug: true,
+	});
+
+	const afterMount = (stdout.write as any).lastCall.args[0] as string;
+	t.true(afterMount.includes('HISTORY-X'), 'Static item emitted on mount');
+
+	// Unmount the Wrapper (ancestor of <Static>), not <Static> directly.
+	// Before the fix this left a dangling staticNode pointing at freed WASM
+	// memory, and the rerender below would crash.
+	rerender(<App showWrapper={false} label="live-2" />);
+
+	const afterUnmount = (stdout.write as any).lastCall.args[0] as string;
+	t.true(afterUnmount.includes('live-2'), 'dynamic content renders after unmount');
+	t.false(
+		afterUnmount.includes('HISTORY-X'),
+		'stale static output must not replay',
+	);
+
+	// A second rerender confirms the renderer is still functional.
+	rerender(<App showWrapper={false} label="live-3" />);
+	t.is(
+		(stdout.write as any).lastCall.args[0],
+		'live-3',
+		'renderer remains functional after indirect Static removal',
+	);
+});
+
 test('remounting <Static> via key change emits the new items (nested under <Box>)', t => {
 	/*
 	Exercises the `removeChild` path (Static nested in a <Box>). On key-driven remount, `createInstance` registers the new node before the old one is removed; the removal must not clobber the fresh pointer.
