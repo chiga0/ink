@@ -1,7 +1,6 @@
 import widestLine from 'widest-line';
-import indentString from 'indent-string';
 import Yoga from 'yoga-layout';
-import wrapText from './wrap-text.js';
+import {wrapTextWithMetadata, type TextBoundary} from './wrap-text.js';
 import getMaxWidth from './get-max-width.js';
 import squashTextNodes from './squash-text-nodes.js';
 import renderBorder from './render-border.js';
@@ -15,16 +14,17 @@ import type Output from './output.js';
 // and use it as offset for the rest of the nodes
 // Only first node is taken into account, because other text nodes can't have margin or padding,
 // so their coordinates will be relative to the first node anyway
-const applyPaddingToText = (node: DOMElement, text: string): string => {
+const getTextOffset = (node: DOMElement): {x: number; y: number} => {
 	const yogaNode = node.childNodes[0]?.yogaNode;
 
 	if (yogaNode) {
-		const offsetX = yogaNode.getComputedLeft();
-		const offsetY = yogaNode.getComputedTop();
-		text = '\n'.repeat(offsetY) + indentString(text, offsetX);
+		return {
+			x: yogaNode.getComputedLeft(),
+			y: yogaNode.getComputedTop(),
+		};
 	}
 
-	return text;
+	return {x: 0, y: 0};
 };
 
 export type OutputTransformer = (s: string, index: number) => string;
@@ -105,6 +105,8 @@ const renderNodeToOutput = (
 		offsetY?: number;
 		transformers?: OutputTransformer[];
 		skipStaticElements: boolean;
+		flowIds: Map<unknown, number>;
+		nextFlowId: {value: number};
 	},
 ) => {
 	const {
@@ -112,6 +114,8 @@ const renderNodeToOutput = (
 		offsetY = 0,
 		transformers = [],
 		skipStaticElements,
+		flowIds,
+		nextFlowId,
 	} = options;
 
 	if (skipStaticElements && node.internal_static) {
@@ -138,20 +142,70 @@ const renderNodeToOutput = (
 		}
 
 		if (node.nodeName === 'ink-text') {
-			let text = squashTextNodes(node);
+			const sourceText = squashTextNodes(node);
 
-			if (text.length > 0) {
-				const currentWidth = widestLine(text);
+			if (sourceText.length > 0) {
 				const maxWidth = getMaxWidth(yogaNode);
+				const textWrap = node.style.textWrap ?? 'wrap';
+				const wrapped = wrapTextWithMetadata(
+					sourceText,
+					maxWidth,
+					textWrap,
+					widestLine(sourceText) > maxWidth,
+				);
 
-				if (currentWidth > maxWidth) {
-					const textWrap = node.style.textWrap ?? 'wrap';
-					text = wrapText(text, maxWidth, textWrap);
+				const flowKey = node.attributes['selectionFlow'] ?? node;
+				let flowId = flowIds.get(flowKey);
+				if (flowId === undefined) {
+					flowId = nextFlowId.value++;
+					flowIds.set(flowKey, flowId);
 				}
 
-				text = applyPaddingToText(node, text);
+				const boundaries: (TextBoundary | null)[] = [...wrapped.boundaries];
+				const breakAfter = node.attributes[
+					'selectionBreakAfter'
+				] as string | undefined;
+				boundaries.push(
+					breakAfter === 'soft' || breakAfter === 'hard'
+						? {
+								kind: breakAfter,
+								joiner:
+									typeof node.attributes['selectionJoiner'] === 'string'
+										? (node.attributes['selectionJoiner'] as string)
+										: breakAfter === 'hard'
+											? '\n'
+											: '',
+							}
+						: null,
+				);
 
-				output.write(x, y, text, {transformers: newTransformers});
+				const textOffset = getTextOffset(node);
+
+				if (textOffset.x > 0) {
+					const padding = wrapped.text
+						.split('\n')
+						.map(line => (line.length > 0 ? ' '.repeat(textOffset.x) : ''))
+						.join('\n');
+					output.write(x, y + textOffset.y, padding, {
+						transformers: newTransformers,
+						semantic: {
+							flowId,
+							selectable: false,
+							selectableRows: wrapped.selectableRows.map(() => false),
+							boundaries: wrapped.boundaries.map(() => null),
+						},
+					});
+				}
+
+				output.write(x + textOffset.x, y + textOffset.y, wrapped.text, {
+					transformers: newTransformers,
+					semantic: {
+						flowId,
+						selectable: node.attributes['selectable'] !== false,
+						selectableRows: wrapped.selectableRows,
+						boundaries,
+					},
+				});
 			}
 
 			return;
@@ -201,6 +255,8 @@ const renderNodeToOutput = (
 					offsetY: y,
 					transformers: newTransformers,
 					skipStaticElements,
+					flowIds,
+					nextFlowId,
 				});
 			}
 

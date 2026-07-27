@@ -7,6 +7,49 @@ import {
 	tokenize,
 } from '@alcalzone/ansi-tokenize';
 import {type OutputTransformer} from './render-node-to-output.js';
+import {
+	type ScreenSelection,
+	type FrameCell,
+	type FrameBoundary,
+} from './frame-controller.js';
+import {type TextBoundary} from './wrap-text.js';
+
+// Background applied to selected cells. Appended after a cell's existing styles
+// so the foreground is preserved and this background wins at the terminal.
+const SELECTION_BG = {code: '\x1b[48;5;240m', endCode: '\x1b[49m'};
+
+// Linear reading-order selection: whole rows between the first and last, partial
+// on the first/last row. Coordinates are screen cells in the composited frame.
+const isCellSelected = (
+	x: number,
+	y: number,
+	sel: ScreenSelection,
+): boolean => {
+	if (y < sel.sy || y > sel.ey) {
+		return false;
+	}
+
+	if (sel.sy === sel.ey) {
+		return x >= sel.sx && x <= sel.ex;
+	}
+
+	if (y === sel.sy) {
+		return x >= sel.sx;
+	}
+
+	if (y === sel.ey) {
+		return x <= sel.ex;
+	}
+
+	return true;
+};
+
+export type SemanticMetadata = {
+	flowId: number;
+	selectable: boolean;
+	selectableRows: boolean[];
+	boundaries: (TextBoundary | null)[];
+};
 
 /**
 "Virtual" output class
@@ -29,6 +72,8 @@ type WriteOperation = {
 	y: number;
 	text: string;
 	transformers: OutputTransformer[];
+	selectable?: boolean;
+	semantic?: SemanticMetadata;
 };
 
 type ClipOperation = {
@@ -106,9 +151,13 @@ export default class Output {
 		x: number,
 		y: number,
 		text: string,
-		options: {transformers: OutputTransformer[]},
+		options: {
+			transformers: OutputTransformer[];
+			selectable?: boolean;
+			semantic?: SemanticMetadata;
+		},
 	): void {
-		const {transformers} = options;
+		const {transformers, selectable, semantic} = options;
 
 		if (!text) {
 			return;
@@ -120,6 +169,8 @@ export default class Output {
 			y,
 			text,
 			transformers,
+			selectable,
+			semantic,
 		});
 	}
 
@@ -136,12 +187,17 @@ export default class Output {
 		});
 	}
 
-	get(): {output: string; height: number} {
+	get(selection?: ScreenSelection | null): {
+		output: string;
+		height: number;
+		cells: FrameCell[][];
+		boundaries: (FrameBoundary | null)[][];
+	} {
 		// Initialize output array with a specific set of rows, so that margin/padding at the bottom is preserved
-		const output: StyledChar[][] = [];
+		const output: FrameCell[][] = [];
 
 		for (let y = 0; y < this.height; y++) {
-			const row: StyledChar[] = [];
+			const row: FrameCell[] = [];
 
 			for (let x = 0; x < this.width; x++) {
 				row.push({
@@ -149,11 +205,17 @@ export default class Output {
 					value: ' ',
 					fullWidth: false,
 					styles: [],
+					selectable: false,
+					flowId: null,
 				});
 			}
 
 			output.push(row);
 		}
+
+		const boundaries: (FrameBoundary | null)[][] = output.map(() =>
+			Array.from({length: this.width}, () => null),
+		);
 
 		const clips: Clip[] = [];
 
@@ -167,9 +229,10 @@ export default class Output {
 			}
 
 			if (operation.type === 'write') {
-				const {text, transformers} = operation;
+				const {text, transformers, selectable, semantic} = operation;
 				let {x, y} = operation;
 				let lines = text.split('\n');
+				let firstLineIndex = 0;
 
 				const clip = clips.at(-1);
 
@@ -218,6 +281,7 @@ export default class Output {
 						const to = y + height > clip.y2! ? clip.y2! - y : height;
 
 						lines = lines.slice(from, to);
+						firstLineIndex = from;
 
 						if (y < clip.y1!) {
 							y = clip.y1!;
@@ -239,8 +303,44 @@ export default class Output {
 						line = transformer(line, index);
 					}
 
+					const boundaryRow = boundaries[y + offsetY];
+
+					if (boundaryRow) {
+						const boundaryWidth = semantic
+							? Math.max(1, this.caches.getStringWidth(line))
+							: this.caches.getStringWidth(line);
+						const boundaryOrigin = x;
+						const startX = Math.max(0, boundaryOrigin, clip?.x1 ?? 0);
+						const endX = Math.min(
+							this.width,
+							boundaryOrigin + boundaryWidth,
+							clip?.x2 ?? this.width,
+						);
+						const sourceBoundary =
+							semantic?.boundaries[firstLineIndex + index] ?? null;
+						const boundary: FrameBoundary | null =
+							sourceBoundary && semantic
+								? {
+										...sourceBoundary,
+										flowId: semantic.flowId,
+										selectable: semantic.selectable,
+									}
+								: null;
+
+						for (let boundaryX = startX; boundaryX < endX; boundaryX++) {
+							if (boundaryX < boundaryRow.length) {
+								boundaryRow[boundaryX] = boundary;
+							}
+						}
+					}
+
 					const characters = this.caches.getStyledChars(line);
 					let offsetX = x;
+
+					const rowSelectable = semantic
+						? semantic.selectable &&
+							(semantic.selectableRows[firstLineIndex + index] ?? true)
+						: (selectable ?? true);
 
 					// Nothing to write (e.g. line was clipped away).
 					if (characters.length === 0) {
@@ -248,11 +348,13 @@ export default class Output {
 						continue;
 					}
 
-					const spaceCell: StyledChar = {
+					const spaceCell: FrameCell = {
 						type: 'char',
 						value: ' ',
 						fullWidth: false,
 						styles: [],
+						selectable: false,
+						flowId: null,
 					};
 
 					// Wide characters (e.g. CJK) occupy two cells: a leading
@@ -270,7 +372,11 @@ export default class Output {
 					}
 
 					for (const character of characters) {
-						currentLine[offsetX] = character;
+						currentLine[offsetX] = {
+							...character,
+							selectable: rowSelectable,
+							flowId: semantic?.flowId ?? null,
+						};
 
 						// Determine printed width using string-width to align with measurement
 						const characterWidth = Math.max(
@@ -286,6 +392,8 @@ export default class Output {
 									value: '',
 									fullWidth: false,
 									styles: character.styles,
+									selectable: rowSelectable,
+									flowId: semantic?.flowId ?? null,
 								};
 							}
 						}
@@ -302,18 +410,49 @@ export default class Output {
 			}
 		}
 
+		// Apply the selection highlight before serialization. Selected slots are
+		// replaced with new cell objects (never mutated in place) because cells
+		// reference StyledChar objects cached and shared across identical lines,
+		// so mutating one would leak the highlight onto other on-screen text.
+		if (selection) {
+			for (let y = 0; y < output.length; y++) {
+				const row = output[y];
+				if (!row) {
+					continue;
+				}
+
+				for (let x = 0; x < row.length; x++) {
+					if (!isCellSelected(x, y, selection)) {
+						continue;
+					}
+
+					const cell = row[x];
+					if (cell) {
+						row[x] = {
+							...cell,
+							styles: [...(cell.styles ?? []), SELECTION_BG],
+						};
+					}
+				}
+			}
+		}
+
 		const generatedOutput = output
 			.map(line => {
 				// See https://github.com/vadimdemedes/ink/pull/564#issuecomment-1637022742
 				const lineWithoutEmptyItems = line.filter(item => item !== undefined);
 
-				return styledCharsToString(lineWithoutEmptyItems).trimEnd();
+				return styledCharsToString(
+					lineWithoutEmptyItems as StyledChar[],
+				).trimEnd();
 			})
 			.join('\n');
 
 		return {
 			output: generatedOutput,
 			height: output.length,
+			cells: output,
+			boundaries,
 		};
 	}
 }

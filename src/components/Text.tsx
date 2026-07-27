@@ -62,6 +62,26 @@ export type Props = {
 	*/
 	readonly wrap?: Styles['textWrap'];
 
+	/**
+	Whether the text is selectable. Defaults to `true`.
+	*/
+	readonly selectable?: boolean;
+
+	/**
+	Selection flow key. Text nodes sharing the same flow key are treated as a single selection unit.
+	*/
+	readonly selectionFlow?: unknown;
+
+	/**
+	Insert a boundary after this text node. `'soft'` joins with surrounding text, `'hard'` starts a new line.
+	*/
+	readonly selectionBreakAfter?: 'soft' | 'hard';
+
+	/**
+	Custom joiner string used when `selectionBreakAfter` is `'soft'`.
+	*/
+	readonly selectionJoiner?: string;
+
 	readonly children?: ReactNode;
 };
 
@@ -78,6 +98,10 @@ export default function Text({
 	strikethrough = false,
 	inverse = false,
 	wrap = 'wrap',
+	selectable = true,
+	selectionFlow,
+	selectionBreakAfter,
+	selectionJoiner = '',
 	children,
 	'aria-label': ariaLabel,
 	'aria-hidden': ariaHidden = false,
@@ -138,6 +162,10 @@ export default function Text({
 		<ink-text
 			style={{flexGrow: 0, flexShrink: 1, flexDirection: 'row', textWrap: wrap}}
 			internal_transform={transform}
+			selectable={selectable}
+			selectionFlow={selectionFlow}
+			selectionBreakAfter={selectionBreakAfter}
+			selectionJoiner={selectionJoiner}
 		>
 			{childrenOrAriaLabel}
 		</ink-text>

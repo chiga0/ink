@@ -18,6 +18,10 @@ import {hideCursorEscape, showCursorEscape} from './cursor-helpers.js';
 import logUpdate, {type LogUpdate, type CursorPosition} from './log-update.js';
 import {bsu, esu, shouldSynchronize} from './write-synchronized.js';
 import instances from './instances.js';
+import {
+	createFrameController,
+	type FrameController,
+} from './frame-controller.js';
 import App from './components/App.js';
 import {type TerminalSuspension} from './components/AppContext.js';
 import {accessibilityContext as AccessibilityContext} from './components/AccessibilityContext.js';
@@ -327,6 +331,7 @@ export default class Ink {
 	private kittyFlags: KittyFlagName[] | undefined;
 	private cancelKittyDetection?: () => void;
 	private nextRenderCommit?: {promise: Promise<void>; resolve: () => void};
+	readonly frameController: FrameController;
 	// Set while suspendTerminal() has handed the terminal to a child process.
 	private isSuspended = false;
 	// Input pause/resume hooks registered by the App component, which owns raw
@@ -378,6 +383,14 @@ export default class Ink {
 		}
 
 		this.rootNode.onImmediateRender = this.onRender;
+
+		// Bridge for application-level text selection: setSelection schedules a
+		// throttled repaint via the same path as a normal render, and each frame
+		// publishes its composited cells (see onRender).
+		this.frameController = createFrameController(() => {
+			this.rootNode.onRender?.();
+		});
+
 		this.rootNode.onStaticChange = this.handleStaticChange;
 		this.log = logUpdate.create(options.stdout, {
 			incremental: options.incrementalRendering,
@@ -567,10 +580,21 @@ export default class Ink {
 		}
 
 		const startTime = performance.now();
-		const {output, outputHeight, staticOutput} = render(
+		const selection = this.frameController.getSelection() ?? null;
+		const {output, outputHeight, staticOutput, cells, boundaries} = render(
 			this.rootNode,
 			this.isScreenReaderEnabled,
+			selection,
 		);
+
+		if (cells) {
+			this.frameController.publishFrame({
+				width: cells.reduce((width, row) => Math.max(width, row.length), 0),
+				height: cells.length,
+				cells,
+				boundaries: boundaries ?? [],
+			});
+		}
 
 		this.options.onRender?.({renderTime: performance.now() - startTime});
 
@@ -1045,6 +1069,7 @@ export default class Ink {
 				this.options.stdout,
 				ansiEscapes.enterAlternativeScreen,
 			);
+			this.writeBestEffort(this.options.stdout, ansiEscapes.clearTerminal);
 			this.writeBestEffort(this.options.stdout, hideCursorEscape);
 		}
 	}
@@ -1112,6 +1137,7 @@ export default class Ink {
 		outputHeight: number,
 		staticOutput: string,
 	): void {
+		this.log.setCursorPosition(this.cursorPosition);
 		const hasStaticOutput = staticOutput !== '';
 		const isTty = this.options.stdout.isTTY;
 

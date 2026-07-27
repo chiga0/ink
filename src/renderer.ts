@@ -3,14 +3,25 @@ import renderNodeToOutput, {
 } from './render-node-to-output.js';
 import Output from './output.js';
 import {type DOMElement} from './dom.js';
+import {
+	type ScreenSelection,
+	type FrameCell,
+	type FrameBoundary,
+} from './frame-controller.js';
 
 type Result = {
 	output: string;
 	outputHeight: number;
 	staticOutput: string;
+	cells?: FrameCell[][];
+	boundaries?: (FrameBoundary | null)[][];
 };
 
-const renderer = (node: DOMElement, isScreenReaderEnabled: boolean): Result => {
+const renderer = (
+	node: DOMElement,
+	isScreenReaderEnabled: boolean,
+	selection?: ScreenSelection | null,
+): Result => {
 	if (node.yogaNode) {
 		if (isScreenReaderEnabled) {
 			const output = renderNodeToScreenReaderOutput(node, {
@@ -39,8 +50,13 @@ const renderer = (node: DOMElement, isScreenReaderEnabled: boolean): Result => {
 			height: node.yogaNode.getComputedHeight(),
 		});
 
+		const flowIds = new Map<unknown, number>();
+		const nextFlowId = {value: 1};
+
 		renderNodeToOutput(node, output, {
 			skipStaticElements: true,
+			flowIds,
+			nextFlowId,
 		});
 
 		let staticOutput;
@@ -53,10 +69,17 @@ const renderer = (node: DOMElement, isScreenReaderEnabled: boolean): Result => {
 
 			renderNodeToOutput(node.staticNode, staticOutput, {
 				skipStaticElements: false,
+				flowIds,
+				nextFlowId,
 			});
 		}
 
-		const {output: generatedOutput, height: outputHeight} = output.get();
+		const {
+			output: generatedOutput,
+			height: outputHeight,
+			cells,
+			boundaries,
+		} = output.get(selection);
 
 		return {
 			output: generatedOutput,
@@ -64,6 +87,8 @@ const renderer = (node: DOMElement, isScreenReaderEnabled: boolean): Result => {
 			// Newline at the end is needed, because static output doesn't have one, so
 			// interactive output will override last line of static output
 			staticOutput: staticOutput ? `${staticOutput.get().output}\n` : '',
+			cells,
+			boundaries,
 		};
 	}
 
