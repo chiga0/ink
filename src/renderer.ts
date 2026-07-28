@@ -14,13 +14,13 @@ type Result = {
 	outputHeight: number;
 	staticOutput: string;
 	cells?: FrameCell[][];
-	boundaries?: (FrameBoundary | null)[][];
+	boundaries?: Array<Array<FrameBoundary | undefined>>;
 };
 
 const renderer = (
 	node: DOMElement,
 	isScreenReaderEnabled: boolean,
-	selection?: ScreenSelection | null,
+	selection?: ScreenSelection,
 ): Result => {
 	if (node.yogaNode) {
 		if (isScreenReaderEnabled) {

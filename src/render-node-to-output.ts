@@ -161,22 +161,23 @@ const renderNodeToOutput = (
 					flowIds.set(flowKey, flowId);
 				}
 
-				const boundaries: (TextBoundary | null)[] = [...wrapped.boundaries];
-				const breakAfter = node.attributes[
-					'selectionBreakAfter'
-				] as string | undefined;
+				const boundaries: Array<TextBoundary | undefined> = [
+					...wrapped.boundaries,
+				];
+				const breakAfter = node.attributes['selectionBreakAfter'] as
+					string | undefined;
 				boundaries.push(
 					breakAfter === 'soft' || breakAfter === 'hard'
 						? {
 								kind: breakAfter,
 								joiner:
 									typeof node.attributes['selectionJoiner'] === 'string'
-										? (node.attributes['selectionJoiner'] as string)
+										? node.attributes['selectionJoiner']
 										: breakAfter === 'hard'
 											? '\n'
 											: '',
 							}
-						: null,
+						: undefined,
 				);
 
 				const textOffset = getTextOffset(node);
@@ -192,7 +193,7 @@ const renderNodeToOutput = (
 							flowId,
 							selectable: false,
 							selectableRows: wrapped.selectableRows.map(() => false),
-							boundaries: wrapped.boundaries.map(() => null),
+							boundaries: wrapped.boundaries.map(() => undefined),
 						},
 					});
 				}

@@ -16,7 +16,7 @@ import {type TextBoundary} from './wrap-text.js';
 
 // Background applied to selected cells. Appended after a cell's existing styles
 // so the foreground is preserved and this background wins at the terminal.
-const SELECTION_BG = {code: '\x1b[48;5;240m', endCode: '\x1b[49m'};
+const selectionBackground = {code: '\u001B[48;5;240m', endCode: '\u001B[49m'};
 
 // Linear reading-order selection: whole rows between the first and last, partial
 // on the first/last row. Coordinates are screen cells in the composited frame.
@@ -48,7 +48,7 @@ export type SemanticMetadata = {
 	flowId: number;
 	selectable: boolean;
 	selectableRows: boolean[];
-	boundaries: (TextBoundary | null)[];
+	boundaries: Array<TextBoundary | undefined>;
 };
 
 /**
@@ -187,11 +187,11 @@ export default class Output {
 		});
 	}
 
-	get(selection?: ScreenSelection | null): {
+	get(selection?: ScreenSelection): {
 		output: string;
 		height: number;
 		cells: FrameCell[][];
-		boundaries: (FrameBoundary | null)[][];
+		boundaries: Array<Array<FrameBoundary | undefined>>;
 	} {
 		// Initialize output array with a specific set of rows, so that margin/padding at the bottom is preserved
 		const output: FrameCell[][] = [];
@@ -206,15 +206,15 @@ export default class Output {
 					fullWidth: false,
 					styles: [],
 					selectable: false,
-					flowId: null,
+					flowId: undefined,
 				});
 			}
 
 			output.push(row);
 		}
 
-		const boundaries: (FrameBoundary | null)[][] = output.map(() =>
-			Array.from({length: this.width}, () => null),
+		const boundaries: Array<Array<FrameBoundary | undefined>> = output.map(() =>
+			Array.from({length: this.width}, () => undefined),
 		);
 
 		const clips: Clip[] = [];
@@ -317,15 +317,15 @@ export default class Output {
 							clip?.x2 ?? this.width,
 						);
 						const sourceBoundary =
-							semantic?.boundaries[firstLineIndex + index] ?? null;
-						const boundary: FrameBoundary | null =
+							semantic?.boundaries[firstLineIndex + index] ?? undefined;
+						const boundary: FrameBoundary | undefined =
 							sourceBoundary && semantic
 								? {
 										...sourceBoundary,
 										flowId: semantic.flowId,
 										selectable: semantic.selectable,
 									}
-								: null;
+								: undefined;
 
 						for (let boundaryX = startX; boundaryX < endX; boundaryX++) {
 							if (boundaryX < boundaryRow.length) {
@@ -354,7 +354,7 @@ export default class Output {
 						fullWidth: false,
 						styles: [],
 						selectable: false,
-						flowId: null,
+						flowId: undefined,
 					};
 
 					// Wide characters (e.g. CJK) occupy two cells: a leading
@@ -375,7 +375,7 @@ export default class Output {
 						currentLine[offsetX] = {
 							...character,
 							selectable: rowSelectable,
-							flowId: semantic?.flowId ?? null,
+							flowId: semantic?.flowId ?? undefined,
 						};
 
 						// Determine printed width using string-width to align with measurement
@@ -393,7 +393,7 @@ export default class Output {
 									fullWidth: false,
 									styles: character.styles,
 									selectable: rowSelectable,
-									flowId: semantic?.flowId ?? null,
+									flowId: semantic?.flowId ?? undefined,
 								};
 							}
 						}
@@ -415,8 +415,7 @@ export default class Output {
 		// reference StyledChar objects cached and shared across identical lines,
 		// so mutating one would leak the highlight onto other on-screen text.
 		if (selection) {
-			for (let y = 0; y < output.length; y++) {
-				const row = output[y];
+			for (const [y, row] of output.entries()) {
 				if (!row) {
 					continue;
 				}
@@ -430,7 +429,7 @@ export default class Output {
 					if (cell) {
 						row[x] = {
 							...cell,
-							styles: [...(cell.styles ?? []), SELECTION_BG],
+							styles: [...(cell.styles ?? []), selectionBackground],
 						};
 					}
 				}

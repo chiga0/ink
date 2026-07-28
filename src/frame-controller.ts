@@ -13,7 +13,7 @@ export type FrameCell = {
 	fullWidth: boolean;
 	styles: unknown[];
 	selectable: boolean;
-	flowId: number | null;
+	flowId: number | undefined;
 };
 
 export type FrameBoundary = {
@@ -26,21 +26,21 @@ export type FrameBoundary = {
 export type ReadonlyFrame = {
 	width: number;
 	height: number;
-	cells: ReadonlyArray<ReadonlyArray<FrameCell>>;
-	boundaries: ReadonlyArray<ReadonlyArray<FrameBoundary | null>>;
+	cells: ReadonlyArray<readonly FrameCell[]>;
+	boundaries: ReadonlyArray<ReadonlyArray<FrameBoundary | undefined>>;
 };
 
 export type FrameController = {
-	getFrame(): ReadonlyFrame | null;
-	getSelection(): ScreenSelection | null;
-	setSelection(selection: ScreenSelection | null): void;
+	getFrame(): ReadonlyFrame | undefined;
+	getSelection(): ScreenSelection | undefined;
+	setSelection(selection: ScreenSelection | undefined): void;
 	subscribe(listener: (frame: ReadonlyFrame) => void): () => void;
 	publishFrame(frame: ReadonlyFrame): void;
 };
 
 const sameSelection = (
-	a: ScreenSelection | null,
-	b: ScreenSelection | null,
+	a: ScreenSelection | undefined,
+	b: ScreenSelection | undefined,
 ): boolean => {
 	if (a === b) {
 		return true;
@@ -61,14 +61,14 @@ const sameSelection = (
 export const createFrameController = (
 	requestRender: () => void,
 ): FrameController => {
-	let currentSelection: ScreenSelection | null = null;
-	let lastFrame: ReadonlyFrame | null = null;
+	let currentSelection: ScreenSelection | undefined;
+	let lastFrame: ReadonlyFrame | undefined;
 	const listeners = new Set<(frame: ReadonlyFrame) => void>();
 
 	return {
 		getFrame: () => lastFrame,
 		getSelection: () => currentSelection,
-		setSelection(selection: ScreenSelection | null) {
+		setSelection(selection: ScreenSelection | undefined) {
 			if (sameSelection(currentSelection, selection)) {
 				return;
 			}

@@ -297,6 +297,8 @@ export default class Ink {
 	*/
 	readonly isConcurrent: boolean;
 
+	readonly frameController: FrameController;
+
 	private readonly options: Options;
 	private readonly log: LogUpdate;
 	private cursorPosition: CursorPosition | undefined;
@@ -331,7 +333,6 @@ export default class Ink {
 	private kittyFlags: KittyFlagName[] | undefined;
 	private cancelKittyDetection?: () => void;
 	private nextRenderCommit?: {promise: Promise<void>; resolve: () => void};
-	readonly frameController: FrameController;
 	// Set while suspendTerminal() has handed the terminal to a child process.
 	private isSuspended = false;
 	// Input pause/resume hooks registered by the App component, which owns raw
@@ -580,7 +581,7 @@ export default class Ink {
 		}
 
 		const startTime = performance.now();
-		const selection = this.frameController.getSelection() ?? null;
+		const selection = this.frameController.getSelection();
 		const {output, outputHeight, staticOutput, cells, boundaries} = render(
 			this.rootNode,
 			this.isScreenReaderEnabled,
@@ -588,8 +589,13 @@ export default class Ink {
 		);
 
 		if (cells) {
+			let width = 0;
+			for (const row of cells) {
+				width = Math.max(width, row.length);
+			}
+
 			this.frameController.publishFrame({
-				width: cells.reduce((width, row) => Math.max(width, row.length), 0),
+				width,
 				height: cells.length,
 				cells,
 				boundaries: boundaries ?? [],
