@@ -5,13 +5,14 @@ import {
 	NoEventPriority,
 } from 'react-reconciler/constants.js';
 import * as Scheduler from 'scheduler';
-import Yoga, {type Node as YogaNode} from 'yoga-layout';
+import Yoga from 'yoga-layout';
 import {createContext, version as reactVersion} from 'react';
 import {
 	createTextNode,
 	appendChildNode,
 	insertBeforeNode,
 	removeChildNode,
+	freeYogaSubtree,
 	emitLayoutListeners,
 	setStyle,
 	setTextNodeValue,
@@ -78,42 +79,51 @@ const diff = (before: AnyObject, after: AnyObject): AnyObject | undefined => {
 	return isChanged ? changed : undefined;
 };
 
-const cleanupYogaNode = (node?: YogaNode): void => {
-	node?.unsetMeasureFunc();
-	node?.freeRecursive();
+const findRootNode = (node: DOMElement): DOMElement | undefined => {
+	let current: DOMElement | undefined = node;
+
+	while (current) {
+		if (current.nodeName === 'ink-root') {
+			return current;
+		}
+
+		current = current.parentNode;
+	}
+
+	return undefined;
 };
 
 /**
- * Clear `staticNode` (and its change-detection counterpart `previousStaticNode`)
- * when the node it points at is being removed as part of a larger subtree.
+ * Clear the root's cached `staticNode` when the node it points at is being
+ * removed as part of a larger subtree.
  *
- * The existing identity check (`staticNode === removeNode`) only catches direct
+ * The previous identity check (`staticNode === removeNode`) only caught direct
  * removal of the `<Static>` element. When an *ancestor* of `<Static>` is
- * removed, `freeRecursive()` frees the static node's Yoga WASM memory but the
- * stale `staticNode` reference survives, and the next render calls
- * `getComputedWidth()` on freed memory → `RuntimeError: memory access out of
- * bounds` (see QwenLM/qwen-code#6820).
+ * removed, the stale `staticNode` reference survives and the next render would
+ * replay stale static output (and, before `freeYogaSubtree`, trap on freed
+ * WASM memory — see QwenLM/qwen-code#6820).
  *
- * Must be called BEFORE `removeChildNode` breaks the parent chain.
+ * The owning root is derived from the host parent passed to the removal hook,
+ * not a module-level global, so instances with separate stdout streams don't
+ * clobber each other's pointers.
  */
 const clearStaticNodeIfContained = (
+	rootNode: DOMElement | undefined,
 	removeNode: DOMElement | TextNode,
 ): void => {
-	const staticNode = currentRootNode?.staticNode;
-
-	if (!staticNode) {
+	if (!rootNode?.staticNode) {
 		return;
 	}
 
 	// Walk up from staticNode to see if removeNode is an ancestor.
-	let current: DOMElement | undefined = staticNode;
+	let current: DOMElement | undefined = rootNode.staticNode;
 
 	while (current) {
 		if (current === removeNode) {
 			// Only clear staticNode, not previousStaticNode. The inequality
 			// (undefined !== previousStaticNode) triggers onStaticChange in
 			// resetAfterCommit, which resets fullStaticOutput.
-			currentRootNode!.staticNode = undefined;
+			rootNode.staticNode = undefined;
 			return;
 		}
 
@@ -340,16 +350,12 @@ export default createReconciler<
 	appendChildToContainer: appendChildNode,
 	insertInContainerBefore: insertBeforeNode,
 	removeChildFromContainer(node, removeNode) {
-		// Must run before removeChildNode breaks the parent chain.
-		clearStaticNodeIfContained(removeNode);
+		// `node` is the container, i.e. the root itself. Clear before
+		// removeChildNode breaks the parent chain.
+		clearStaticNodeIfContained(findRootNode(node), removeNode);
 
 		removeChildNode(node, removeNode);
-		cleanupYogaNode(removeNode.yogaNode);
-
-		// Prevent stale references from accessing freed WASM memory. The JS
-		// wrapper stays truthy after freeRecursive(), so optional chaining
-		// (?.yogaNode) cannot detect the freed state on its own.
-		removeNode.yogaNode = undefined;
+		freeYogaSubtree(removeNode);
 	},
 	commitUpdate(node, _type, oldProps, newProps) {
 		if (currentRootNode && node.internal_static) {
@@ -400,11 +406,12 @@ export default createReconciler<
 		setTextNodeValue(node, newText);
 	},
 	removeChild(node, removeNode) {
-		clearStaticNodeIfContained(removeNode);
+		// `node` is the host parent; its chain up to the root is still intact
+		// here, so derive the owning root from it rather than a global.
+		clearStaticNodeIfContained(findRootNode(node), removeNode);
 
 		removeChildNode(node, removeNode);
-		cleanupYogaNode(removeNode.yogaNode);
-		removeNode.yogaNode = undefined;
+		freeYogaSubtree(removeNode);
 	},
 	setCurrentUpdatePriority(newPriority: number) {
 		currentUpdatePriority = newPriority;
