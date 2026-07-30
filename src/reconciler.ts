@@ -139,8 +139,6 @@ type HostContext = {
 
 let currentUpdatePriority = NoEventPriority;
 
-let currentRootNode: DOMElement | undefined;
-
 async function loadPackageJson() {
 	const fs = await import('node:fs');
 	const content = fs.readFileSync(
@@ -282,7 +280,6 @@ export default createReconciler<
 			}
 
 			if (key === 'internal_static') {
-				currentRootNode = rootNode;
 				node.internal_static = true;
 				rootNode.isStaticDirty = true;
 
@@ -358,8 +355,12 @@ export default createReconciler<
 		freeYogaSubtree(removeNode);
 	},
 	commitUpdate(node, _type, oldProps, newProps) {
-		if (currentRootNode && node.internal_static) {
-			currentRootNode.isStaticDirty = true;
+		if (node.internal_static) {
+			const rootNode = findRootNode(node);
+
+			if (rootNode) {
+				rootNode.isStaticDirty = true;
+			}
 		}
 
 		const props = diff(oldProps, newProps);

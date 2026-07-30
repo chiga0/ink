@@ -778,6 +778,59 @@ test('separate Ink instances do not clobber each other’s staticNode', t => {
 	second.unmount();
 });
 
+test('updating <Static> in one instance after another instance mounted <Static> sets the dirty flag on the correct root', t => {
+	// CommitUpdate must derive the owning root from the updated node, not a
+	// module-level global. Rendering <Static> in the second instance used to
+	// move the global pointer; appending to the first instance's <Static> then
+	// set isStaticDirty on the second root, so the first root missed its
+	// immediate render and the new item was lost.
+	const stdout1 = createStdout();
+	const stdout2 = createStdout();
+
+	function App({
+		items,
+		label,
+	}: {
+		readonly items: string[];
+		readonly label: string;
+	}) {
+		return (
+			<Box>
+				<Static items={items}>{item => <Text key={item}>{item}</Text>}</Static>
+				<Text>{label}</Text>
+			</Box>
+		);
+	}
+
+	const first = render(<App items={['A']} label="first" />, {
+		stdout: stdout1,
+		debug: true,
+	});
+
+	// Mounting <Static> in the second instance used to overwrite the global
+	// root pointer.
+	const second = render(<App items={['X']} label="second" />, {
+		stdout: stdout2,
+		debug: true,
+	});
+
+	// Append to the FIRST instance's <Static>. This triggers commitUpdate on
+	// the first root's static node. The dirty flag must land on the first root
+	// so the immediate render fires before useLayoutEffect clears the children.
+	first.rerender(<App items={['A', 'B']} label="first" />);
+
+	const firstOut = (stdout1.write as any).lastCall.args[0] as string;
+	t.true(firstOut.includes('B'), 'appended static item must reach stdout');
+
+	// The second instance stays functional and independent.
+	second.rerender(<App items={['X', 'Y']} label="second" />);
+	const secondOut = (stdout2.write as any).lastCall.args[0] as string;
+	t.true(secondOut.includes('Y'), 'second instance static update works');
+
+	first.unmount();
+	second.unmount();
+});
+
 test('unmounting a <Static> ancestor in screen-reader mode does not replay stale output', t => {
 	// The screen-reader render path reads node.staticNode without a yogaNode
 	// guard, so a dangling staticNode would replay the stale static subtree.
