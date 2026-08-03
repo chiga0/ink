@@ -18,20 +18,41 @@ A single cell of the composited frame. Wide characters (e.g. CJK) occupy two
 cells: the leading cell has `fullWidth` set to `true` and carries the
 character, while the trailing placeholder cell has an empty `value`. Skip
 cells with an empty `value` when extracting text.
+
+`selectable` reflects the selection semantics of the `<Text>` the cell
+originated from (and is `false` for non-text content such as box
+backgrounds). Cells of one selection flow share the same numeric `flowId`,
+which is stable for the duration of a single render.
 */
 export type FrameCell = {
 	readonly value: string;
 	readonly fullWidth: boolean;
+	readonly selectable: boolean;
+	readonly flowId: number | undefined;
+};
+
+/**
+How two adjacent regions of text join when copied. `'soft'` boundaries come
+from wrapping (the `joiner` is the whitespace the wrap consumed, possibly
+empty) or an explicit `selectionBreakAfter="soft"`; `'hard'` boundaries come
+from source newlines or `selectionBreakAfter="hard"` and join with `\n`
+unless a custom `joiner` was given.
+*/
+export type FrameBoundary = {
+	readonly kind: 'soft' | 'hard';
+	readonly joiner: string;
 };
 
 /**
 A read-only snapshot of the composited frame. `cells[y][x]` is the cell at
 column `x` of row `y`, with `(0, 0)` at the top-left of Ink's output region.
+`boundaries[y][x]` is the boundary immediately after that cell, if any.
 */
 export type ReadonlyFrame = {
 	readonly width: number;
 	readonly height: number;
 	readonly cells: ReadonlyArray<readonly FrameCell[]>;
+	readonly boundaries: ReadonlyArray<ReadonlyArray<FrameBoundary | undefined>>;
 };
 
 /**
@@ -62,7 +83,8 @@ export type FrameController = {
 	Highlights the given selection region (or clears it with `undefined`) and
 	schedules a repaint through Ink's regular render throttle. Reverse
 	selections are normalized to reading order. Setting an identical selection
-	is a no-op.
+	is a no-op. Non-selectable cells inside the region are not highlighted,
+	matching what a copy would include.
 	*/
 	setSelection(selection: ScreenSelection | undefined): void;
 
@@ -83,9 +105,13 @@ export type InternalFrameController = FrameController & {
 	hasSubscribers(): boolean;
 
 	/**
-	Publishes the composited cells of the frame that was just rendered.
+	Publishes the composited cells and boundaries of the frame that was just
+	rendered.
 	*/
-	publishFrame(cells: ReadonlyArray<readonly FrameCell[]>): void;
+	publishFrame(
+		cells: ReadonlyArray<readonly FrameCell[]>,
+		boundaries: ReadonlyArray<ReadonlyArray<FrameBoundary | undefined>>,
+	): void;
 };
 
 // Normalizes the selection to reading order so reverse drags select the same
@@ -168,16 +194,25 @@ export const createFrameController = (
 			};
 		},
 		hasSubscribers: () => listeners.size > 0,
-		publishFrame(cells) {
+		publishFrame(cells, boundaries) {
 			let width = 0;
 
 			for (const row of cells) {
 				width = Math.max(width, row.length);
 			}
 
-			const frame: ReadonlyFrame = {width, height: cells.length, cells};
+			const frame: ReadonlyFrame = {
+				width,
+				height: cells.length,
+				cells,
+				boundaries,
+			};
 
 			for (const row of cells) {
+				Object.freeze(row);
+			}
+
+			for (const row of boundaries) {
 				Object.freeze(row);
 			}
 

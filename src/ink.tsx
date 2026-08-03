@@ -585,7 +585,7 @@ export default class Ink {
 		}
 
 		const startTime = performance.now();
-		const {output, outputHeight, staticOutput, cells} = render(
+		const {output, outputHeight, staticOutput, cells, boundaries} = render(
 			this.rootNode,
 			this.isScreenReaderEnabled,
 			{
@@ -597,7 +597,7 @@ export default class Ink {
 		);
 
 		if (cells) {
-			this.frameController.publishFrame(cells);
+			this.frameController.publishFrame(cells, boundaries ?? []);
 		}
 
 		this.options.onRender?.({renderTime: performance.now() - startTime});

@@ -406,6 +406,52 @@ If `truncate-*` is passed, Ink will truncate text instead, resulting in one line
 //=> '…World'
 ```
 
+#### selectable
+
+Type: `boolean`\
+Default: `true`
+
+Whether the text is selectable through the [frame controller](#getframecontrollerstdout). Nested `<Text>` nodes override the value inherited from their parent, so a non-selectable region inside selectable text (and vice versa) is reported per cell. Non-selectable cells are skipped by the selection highlight and should be excluded when extracting copied text.
+
+```jsx
+<Text>
+	Copy this, <Text selectable={false}>but not this</Text>, and this.
+</Text>
+```
+
+#### selectionFlow
+
+Type: `unknown`
+
+Groups text nodes into one selection unit: cells of text nodes sharing the same flow key carry the same `flowId` in the composited frame. By default every top-level `<Text>` is its own flow.
+
+```jsx
+<Text selectionFlow="message">First part </Text>
+<Text selectionFlow="message">second part</Text>
+```
+
+#### selectionBreakAfter
+
+Type: `string`\
+Allowed values: `soft` `hard`
+
+Inserts a boundary after the text node, recorded in the frame's `boundaries` grid so consumers know how adjacent text joins when copied. `'soft'` joins with the surrounding text (with `selectionJoiner` as the joiner), `'hard'` starts a new line.
+
+#### selectionJoiner
+
+Type: `string`\
+Default: `''` for `soft`, `'\n'` for `hard`
+
+Custom joiner string used when `selectionBreakAfter` is set.
+
+```jsx
+<Box flexDirection="column">
+	<Text selectionBreakAfter="soft" selectionJoiner=" | ">Row one</Text>
+	<Text>Row two</Text>
+</Box>
+// Copying both rows yields 'Row one | Row two'
+```
+
 ### `<Box>`
 
 `<Box>` is an essential Ink component to build your layout.
@@ -2994,7 +3040,14 @@ The output stream an Ink instance renders to, usually `process.stdout`.
 
 Returns the latest composited frame, or `undefined` when no frame has been published yet.
 
-A frame is a read-only grid of cells: `frame.cells[y][x]` is the cell at column `x` of row `y`, with `(0, 0)` at the top-left of Ink's output region and `frame.width`/`frame.height` the grid dimensions. Each cell exposes `value` (the character, or `''` for the trailing half of a wide character) and `fullWidth` (`true` for wide characters such as CJK, which occupy two cells). To extract the text of a region, concatenate cell values and skip the ones with an empty `value`.
+A frame is a read-only grid of cells: `frame.cells[y][x]` is the cell at column `x` of row `y`, with `(0, 0)` at the top-left of Ink's output region and `frame.width`/`frame.height` the grid dimensions. Each cell exposes:
+
+- `value` — the character, or `''` for the trailing half of a wide character. To extract the text of a region, concatenate cell values and skip the ones with an empty `value`.
+- `fullWidth` — `true` for wide characters such as CJK, which occupy two cells.
+- `selectable` — `false` for text rendered with `selectable={false}` and for non-text content such as box backgrounds; `true` otherwise. Selections (and text extraction) should skip non-selectable cells.
+- `flowId` — identifies the selection flow the cell belongs to (see [`selectionFlow`](#selectionflow)). Cells sharing a `flowId` form one selection unit. Flow ids are stable within a frame but may change between renders.
+
+`frame.boundaries[y][x]` is the boundary immediately after that cell, if any. A boundary tells consumers how the text after it joins when copied: `'soft'` boundaries join with their `joiner` (the whitespace consumed by wrapping, or the `selectionJoiner` of a [`selectionBreakAfter="soft"`](#selectionbreakafter) node), `'hard'` boundaries start a new line.
 
 > [!NOTE]
 > Cell coordinates are positions in Ink's output region, not terminal viewport coordinates. To map a mouse event to a cell, convert the event coordinates by the viewport position of the output region, like with [`measureElement()`](#measureelementref).

@@ -49,5 +49,6 @@ export type {
 	FrameController,
 	ReadonlyFrame,
 	FrameCell,
+	FrameBoundary,
 	ScreenSelection,
 } from './frame-controller.js';
