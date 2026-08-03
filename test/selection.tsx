@@ -291,3 +291,49 @@ test('a subscriber calling setSelection does not re-enter rendering', async t =>
 
 	unmount();
 });
+
+test('getFrameController returns undefined after unmount', t => {
+	const stdout = createStdout();
+	const {unmount} = render(<Text>Hello</Text>, {stdout, debug: true});
+
+	t.truthy(getFrameController(stdout));
+
+	unmount();
+
+	t.is(getFrameController(stdout), undefined);
+});
+
+test('selection highlight reaches the terminal in interactive (non-debug) mode', async t => {
+	const stdout = createStdout();
+	const {unmount} = render(<Text>Hello</Text>, {
+		stdout,
+		interactive: true,
+	});
+
+	const controller = getFrameController(stdout)!;
+	controller.subscribe(() => {});
+	await settle();
+
+	controller.setSelection({sx: 0, sy: 0, ex: 4, ey: 0});
+
+	// Renders are throttled (default maxFps), so give the repaint time to land.
+	await new Promise<void>(resolve => {
+		setTimeout(resolve, 150);
+	});
+
+	// Interactive renders write bsu/content/esu as separate writes, so look at
+	// the last render's writes rather than only the final one.
+	const lastRender = () => stdout.getWrites().slice(-3).join('');
+
+	t.true(lastRender().includes(selectionHighlight));
+
+	controller.setSelection(undefined);
+
+	await new Promise<void>(resolve => {
+		setTimeout(resolve, 150);
+	});
+
+	t.false(lastRender().includes(selectionHighlight));
+
+	unmount();
+});
